@@ -1,14 +1,910 @@
-\documentclass{article}
-\usepackage{graphicx} % Required for inserting images
 
-\title{RHS - Implementations}
-\author{Antonio Aguirre}
-\date{March 2026}
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+\usepackage{booktabs,array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black
+}
+
+\setlist[itemize]{leftmargin=2.2em}
+\setlist[enumerate]{leftmargin=2.4em}
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Normal}{\mathcal{N}}
+\newcommand{\IG}{\mathrm{Inv\mbox{-}Gamma}}
+\newcommand{\diag}{\mathrm{diag}}
+\newcommand{\HS}{\mathrm{HS}}
+\newcommand{\RHS}{\mathrm{RHS}}
+\newcommand{\PV}{\mathrm{PV}}
+\newcommand{\NS}{\mathrm{NS}}
+\newcommand{\Fan}{\mathrm{Fan}}
+\newcommand{\Loc}{\pi_{\mathrm{loc}}}
+\newcommand{\Glo}{\pi_{\mathrm{glo}}}
+
+\title{The Regularized Horseshoe Prior and Its Gibbs Implementations:\\
+A Unified Technical Note on the Formulations of Piironen--Vehtari, Nishimura--Suchard, and Fan et al.}
+\author{}
+\date{}
 
 \begin{document}
-
 \maketitle
+\tableofcontents
 
-\section{Introduction}
+\section{Introduction and roadmap}
+
+The regularized horseshoe prior was introduced to fix a genuine limitation of the ordinary horseshoe: the latter shrinks strongly near zero, but it does not separately control the behavior of large coefficients. In weakly identified problems this can be undesirable, because the posterior may inherit overly heavy tails from the prior. The literature that followed the original proposal is easy to misread, because the later papers do \emph{not} merely ``implement the same model in a different sampler.'' Instead, they make mathematically distinct choices about what is held fixed, what is endowed with a prior, what is part of the conditional prior for the coefficients, and what is absorbed into the prior on the local scales.
+
+This note has four goals.
+
+\begin{enumerate}
+\item To state the ordinary horseshoe and the regularized horseshoe in a common notation.
+\item To explain precisely how the original regularized horseshoe of Piironen and Vehtari differs from the Gibbs-oriented reformulation of Nishimura and Suchard.
+\item To show exactly which full conditionals are preserved and which are modified in the Gibbs samplers.
+\item To place the robust Gibbs implementation of Fan et al.\ in the correct position relative to the earlier literature.
+\end{enumerate}
+
+The central conclusion is the following. The later Gibbs-oriented paper \emph{does} recover the non-regularized horseshoe Gibbs updates for the global--local shrinkage block, but this is \emph{not} because the slab scale is fixed. Rather, it is because the paper changes the \emph{joint} prior structure by introducing an equivalent fictitious-data representation. This preserves the conditional law of $(\tau,\lambda)$ given $\beta$, while still producing the same regularized conditional distribution for $\beta \mid \tau,\lambda,\zeta$ as in the original regularized horseshoe. A prior on the slab scale remains perfectly reasonable from a Bayesian standpoint; what differs across the papers is primarily computational strategy and theoretical focus.
+
+\section{Unified notation}
+
+\subsection{Baseline global--local shrinkage form}
+
+Let $\beta=(\beta_1,\dots,\beta_p)^\top$ denote regression coefficients. A generic global--local prior may be written as
+\begin{equation}
+\beta_j \mid \tau,\lambda_j \sim \Normal(0,\tau^2\lambda_j^2), 
+\qquad 
+\lambda_j \sim \Loc(\cdot),
+\qquad
+\tau \sim \Glo(\cdot),
+\label{eq:global-local}
+\end{equation}
+where $\tau>0$ is the global scale and $\lambda_j>0$ is the local scale. For the ordinary horseshoe,
+\[
+\Loc(\lambda_j)\propto (1+\lambda_j^2)^{-1}, \qquad \lambda_j>0,
+\]
+that is, $\lambda_j \sim C^+(0,1)$.
+
+To reduce notational clutter, it is convenient to define the \emph{effective local standard deviation}
+\begin{equation}
+u_j := \tau \lambda_j .
+\label{eq:uj}
+\end{equation}
+Then the ordinary global--local prior is simply
+\[
+\beta_j \mid u_j \sim \Normal(0,u_j^2).
+\]
+
+\subsection{Unified notation for the slab scale}
+
+Three notations appear in the papers:
+\begin{itemize}
+\item Piironen and Vehtari use $c$ for the slab width.
+\item Nishimura and Suchard use $\zeta$.
+\item Fan et al.\ use $b$.
+\end{itemize}
+
+Mathematically these play the same role: they are positive scale parameters that cap the effective prior variance of large coefficients. In this note I use the master notation $\zeta>0$ and map the papers as
+\[
+\zeta \equiv c \quad \text{(Piironen--Vehtari)}, 
+\qquad
+\zeta \equiv \zeta \quad \text{(Nishimura--Suchard)},
+\qquad
+\zeta \equiv b \quad \text{(Fan et al.)}.
+\]
+
+\subsection{Regularized variance as a common object}
+
+A convenient common object is the regularized variance
+\begin{equation}
+v_j(\zeta) 
+:= 
+\left(\zeta^{-2}+u_j^{-2}\right)^{-1}
+=
+\frac{\zeta^2 u_j^2}{\zeta^2+u_j^2}.
+\label{eq:regvar}
+\end{equation}
+This immediately shows two regimes:
+\[
+u_j^2 \ll \zeta^2
+\quad \Longrightarrow \quad
+v_j(\zeta)\approx u_j^2,
+\qquad
+u_j^2 \gg \zeta^2
+\quad \Longrightarrow \quad
+v_j(\zeta)\approx \zeta^2.
+\]
+Thus regularization leaves small coefficients essentially in the ordinary horseshoe regime, while capping the effective variance for large coefficients.
+
+\subsection{A note on notation in Fan et al.}
+
+One source of confusion is that Fan et al.\ use notation adapted to a robust Laplace regression model. Their \emph{global horseshoe scale} is denoted by $\lambda$, their local scales by $s_j$, and their symbol $\tau$ belongs to the \emph{likelihood}, not to the horseshoe prior. Thus, in their regularized horseshoe prior,
+\[
+u_j = \lambda s_j,
+\qquad
+\zeta = b.
+\]
+Failing to separate the likelihood scale from the horseshoe global scale makes the comparison with the earlier papers unnecessarily hard. Once the mapping above is made explicit, the structural relationship becomes straightforward.
+
+\section{Ordinary horseshoe and the need for regularization}
+
+The ordinary horseshoe is attractive because it combines two features:
+\begin{enumerate}
+\item a sharp spike near zero, which strongly shrinks many coefficients, and
+\item very heavy tails, which allow large signals to escape shrinkage.
+\end{enumerate}
+In Gaussian linear regression, Piironen and Vehtari recall the standard approximation
+\begin{equation}
+\bar{\beta}_j = (1-\kappa_j)\hat{\beta}_j,
+\qquad
+\kappa_j = \frac{1}{1+n\sigma^{-2}\tau^2 s_j^2\lambda_j^2},
+\label{eq:shrinkage-factor}
+\end{equation}
+so the posterior mean is a shrunken version of the least-squares estimate, with $\kappa_j$ controlling the amount of shrinkage. This formula is important conceptually because it makes clear that the ordinary horseshoe governs \emph{sparsity}, but not the magnitude of the largest coefficients once they escape the spike. In weakly identified models that can be problematic.
+
+Piironen and Vehtari therefore make two distinct methodological contributions:
+\begin{enumerate}
+\item they calibrate the prior on the global scale $\tau$ through the effective number of nonzero coefficients, and
+\item they introduce a finite slab width to regularize large coefficients.
+\end{enumerate}
+
+\subsection{Effective number of nonzero coefficients}
+
+They define
+\begin{equation}
+m_{\mathrm{eff}} := \sum_{j=1}^p (1-\kappa_j),
+\label{eq:meff}
+\end{equation}
+and derive, under standardized predictors, the approximation
+\begin{equation}
+\E(m_{\mathrm{eff}} \mid \tau,\sigma)
+=
+\frac{\tau \sigma^{-1}\sqrt{n}}{1+\tau \sigma^{-1}\sqrt{n}}\,p.
+\label{eq:meff-mean}
+\end{equation}
+If one has a prior guess $p_0$ for the number of relevant coefficients, solving $\E(m_{\mathrm{eff}} \mid \tau,\sigma)=p_0$ gives the reference scale
+\begin{equation}
+\tau_0 = \frac{p_0}{p-p_0}\frac{\sigma}{\sqrt{n}}.
+\label{eq:tau0}
+\end{equation}
+This part of the paper is conceptually independent from regularization of the slab. It is about calibrating the \emph{global sparsity level}. The regularized horseshoe then adds a second knob that controls the \emph{largest} coefficients.
+
+\section{The original regularized horseshoe of Piironen--Vehtari}
+
+\subsection{Definition}
+
+The regularized horseshoe of Piironen and Vehtari is defined by
+\begin{equation}
+\beta_j \mid \tau,\lambda_j,\zeta \sim \Normal\!\left(0,\left(\zeta^{-2}+\tau^{-2}\lambda_j^{-2}\right)^{-1}\right).
+\label{eq:pv-cond}
+\end{equation}
+Equivalently,
+\begin{equation}
+\beta_j \mid \tau,\lambda_j,\zeta \sim \Normal\!\left(0,\tau^2\tilde{\lambda}_j^2\right),
+\qquad
+\tilde{\lambda}_j^2=\frac{\zeta^2\lambda_j^2}{\zeta^2+\tau^2\lambda_j^2}.
+\label{eq:pv-tilde-lambda}
+\end{equation}
+They also emphasize the factorization
+\begin{equation}
+p_{\PV}(\beta_j \mid \tau,\lambda_j,\zeta)
+\propto
+\Normal(\beta_j \mid 0,\tau^2\lambda_j^2)\,
+\Normal(\beta_j \mid 0,\zeta^2),
+\label{eq:pv-product}
+\end{equation}
+so the regularized horseshoe may be viewed as the ordinary horseshoe multiplied by a Gaussian slab. This is the key reason the prior is a continuous analogue of spike-and-slab with finite slab width.
+
+\subsection{Direct derivation of the conditional law for $\beta_j$}
+
+Starting from \eqref{eq:pv-cond}, define $u_j=\tau\lambda_j$ as in \eqref{eq:uj}. Then
+\[
+v_j(\zeta)=\left(\zeta^{-2}+u_j^{-2}\right)^{-1}.
+\]
+Hence
+\begin{align}
+p_{\PV}(\beta_j \mid u_j,\zeta)
+&=
+(2\pi v_j(\zeta))^{-1/2}
+\exp\!\left\{-\frac{\beta_j^2}{2v_j(\zeta)}\right\} \notag\\
+&=
+\frac{1}{\sqrt{2\pi}}\,
+u_j^{-1}\Bigl(1+u_j^2/\zeta^2\Bigr)^{1/2}
+\exp\!\left\{-\frac{\beta_j^2}{2u_j^2}-\frac{\beta_j^2}{2\zeta^2}\right\}.
+\label{eq:pv-density-expanded}
+\end{align}
+This identity is useful because it makes the Gibbs issue visible immediately: the normalization factor contains
+\[
+\Bigl(1+u_j^2/\zeta^2\Bigr)^{1/2}
+=
+\Bigl(1+\tau^2\lambda_j^2/\zeta^2\Bigr)^{1/2},
+\]
+so the regularization parameter enters the conditional law for $(\tau,\lambda)$ through the Gaussian normalization constant.
+
+\subsection{What changes in the full conditionals?}
+
+Suppose that under the ordinary global--local prior the joint density factor involving $(\beta_j,\tau,\lambda_j)$ is
+\[
+p(\beta_j,\lambda_j,\tau)
+\propto
+p(\tau)\,
+\frac{1}{\tau\lambda_j}
+\exp\!\left(-\frac{\beta_j^2}{2\tau^2\lambda_j^2}\right)\Loc(\lambda_j).
+\]
+Under the Piironen--Vehtari regularized horseshoe, the same joint factor becomes, up to a multiplicative term independent of $(\tau,\lambda_j)$,
+\begin{equation}
+p_{\PV}(\beta_j,\lambda_j,\tau \mid \zeta)
+\propto
+p(\tau)\,
+\frac{1}{\tau\lambda_j}
+\Bigl(1+\tau^2\lambda_j^2/\zeta^2\Bigr)^{1/2}
+\exp\!\left(-\frac{\beta_j^2}{2\tau^2\lambda_j^2}\right)\Loc(\lambda_j).
+\label{eq:pv-joint}
+\end{equation}
+Therefore the full conditional of $(\tau,\lambda)$ is no longer the same as in the ordinary horseshoe. More explicitly,
+\begin{equation}
+p_{\PV}(\tau,\lambda \mid \beta,\zeta,\text{rest})
+\propto
+p(\tau)
+\prod_{j=1}^p
+\left[
+\frac{1}{\tau\lambda_j}
+\Bigl(1+\tau^2\lambda_j^2/\zeta^2\Bigr)^{1/2}
+\exp\!\left(-\frac{\beta_j^2}{2\tau^2\lambda_j^2}\right)
+\Loc(\lambda_j)
+\right].
+\label{eq:pv-block}
+\end{equation}
+This is the precise sense in which the direct regularized horseshoe disrupts the Gibbs structure: the ordinary global--local updates for $\tau$ and $\lambda_j$ are not preserved.
+
+\subsection{Should one put a prior on $\zeta$ in the original formulation?}
+
+Yes, if the slab width is not known a priori. In fact, Piironen and Vehtari explicitly recommend that a prior on the slab width is often preferable, and propose
+\begin{equation}
+\zeta^2 \sim \IG(\nu/2,\nu s^2/2)
+\label{eq:pv-zeta-prior}
+\end{equation}
+as a convenient weakly informative choice, which induces a Student-$t_\nu(0,s^2)$ slab for the large coefficients.
+
+However, in the direct Piironen--Vehtari formulation, the full conditional of $\zeta^2$ is not conjugate, because \eqref{eq:pv-joint} contains the additional factor
+\[
+\prod_{j=1}^p \Bigl(1+\tau^2\lambda_j^2/\zeta^2\Bigr)^{1/2}.
+\]
+Thus the recommendation to put a prior on $\zeta$ is a \emph{modeling} recommendation, not a statement that exact Gibbs updates will automatically remain simple.
+
+\section{The Gibbs-oriented reformulation of Nishimura--Suchard}
+
+\subsection{Main idea}
+
+Nishimura and Suchard take the statistical motivation of Piironen and Vehtari as given, but change the joint prior construction so that the original global--local Gibbs structure is preserved. They begin from the same regularized conditional law
+\begin{equation}
+\beta_j \mid \tau,\lambda_j,\zeta \sim \Normal\!\left(0,\left(\zeta^{-2}+\tau^{-2}\lambda_j^{-2}\right)^{-1}\right),
+\label{eq:ns-same-cond}
+\end{equation}
+but they do \emph{not} leave the local-scale prior unchanged. Instead they define a joint prior on $(\beta_j,\lambda_j)$ such that
+\begin{equation}
+p_{\NS}(\beta_j,\lambda_j \mid \tau,\zeta)
+\propto
+\exp\!\left(-\frac{\beta_j^2}{2\zeta^2}\right)\,
+\frac{1}{\tau\lambda_j}
+\exp\!\left(-\frac{\beta_j^2}{2\tau^2\lambda_j^2}\right)\,
+\Loc(\lambda_j).
+\label{eq:ns-joint-basic}
+\end{equation}
+By simple algebra,
+\begin{equation}
+p_{\NS}(\beta_j,\lambda_j \mid \tau,\zeta)
+\propto
+\Normal\!\left(\beta_j \mid 0,\left(\zeta^{-2}+\tau^{-2}\lambda_j^{-2}\right)^{-1}\right)
+\Bigl(1+\tau^2\lambda_j^2/\zeta^2\Bigr)^{-1/2}
+\Loc(\lambda_j).
+\label{eq:ns-joint-alt}
+\end{equation}
+This shows the key point:
+
+\begin{quote}
+The conditional prior for $\beta_j \mid \tau,\lambda_j,\zeta$ is the \emph{same} as in Piironen--Vehtari, but the induced prior on $\lambda_j$ is changed by the extra factor $\bigl(1+\tau^2\lambda_j^2/\zeta^2\bigr)^{-1/2}$.
+\end{quote}
+
+Hence the Nishimura--Suchard prior is \emph{not} the same joint prior as Piironen--Vehtari's regularized horseshoe. It is a closely related, slightly more strongly regularized prior that was designed specifically to preserve Gibbs tractability.
+
+\subsection{Direct derivation of the unchanged $(\tau,\lambda)$ block}
+
+Using \eqref{eq:ns-joint-basic}, the joint factor involving $(\beta_j,\tau,\lambda_j)$ is
+\[
+p_{\NS}(\beta_j,\lambda_j,\tau \mid \zeta)
+\propto
+p(\tau)\,
+\exp\!\left(-\frac{\beta_j^2}{2\zeta^2}\right)\,
+\frac{1}{\tau\lambda_j}
+\exp\!\left(-\frac{\beta_j^2}{2\tau^2\lambda_j^2}\right)\Loc(\lambda_j).
+\]
+Conditioning on $\beta_j$ removes the term $\exp(-\beta_j^2/(2\zeta^2))$ because it does not depend on $(\tau,\lambda_j)$. Therefore
+\begin{equation}
+p_{\NS}(\tau,\lambda \mid \beta,\zeta,\text{rest})
+\propto
+p(\tau)\,
+\prod_{j=1}^p
+\left[
+\frac{1}{\tau\lambda_j}
+\exp\!\left(-\frac{\beta_j^2}{2\tau^2\lambda_j^2}\right)\Loc(\lambda_j)
+\right].
+\label{eq:ns-block}
+\end{equation}
+This is exactly the ordinary global--local shrinkage block.
+
+So the statement
+\[
+p_{\NS}(\tau,\lambda \mid \beta,\zeta,\text{rest})
+=
+p_{\HS}(\tau,\lambda \mid \beta,\text{rest})
+\]
+is true, but it is true only because the \emph{joint prior} has been modified to make it true.
+
+\subsection{The fictitious-data augmentation}
+
+The same construction can be represented through pseudo-observations:
+\begin{equation}
+z_j = 0,
+\qquad
+z_j \mid \beta_j,\zeta \sim \Normal(\beta_j,\zeta^2),
+\qquad j=1,\dots,p.
+\label{eq:fictitious-data}
+\end{equation}
+Then
+\[
+p(z_j=0 \mid \beta_j,\zeta) \propto \exp\!\left(-\frac{\beta_j^2}{2\zeta^2}\right),
+\]
+and combining this with the ordinary global--local prior yields exactly \eqref{eq:ns-joint-basic}. This is the cleanest way to understand the mechanism:
+\begin{itemize}
+\item the pseudo-data add a Gaussian ridge-like likelihood term in $\beta$,
+\item the prior on $(\tau,\lambda)$ remains the original one,
+\item therefore the Gibbs update for $(\tau,\lambda)$ is unchanged.
+\end{itemize}
+
+\subsection{Which full conditionals stay the same and which change?}
+
+This is the most important point computationally.
+
+\paragraph{The $(\tau,\lambda)$ block.}
+Unchanged. This is \eqref{eq:ns-block}.
+
+\paragraph{The $\beta$ block.}
+Changed. The pseudo-data add an extra quadratic term in $\beta$, hence an extra $\zeta^{-2}I$ in the precision matrix.
+
+For example, in Gaussian linear regression with
+\[
+y \mid \beta,\sigma^2 \sim \Normal(X\beta,\sigma^2 I_n),
+\]
+the ordinary horseshoe conditional is
+\[
+\beta \mid y,\sigma^2,\tau,\lambda \sim \Normal(m,Q^{-1}),
+\qquad
+Q = \sigma^{-2}X^\top X + \tau^{-2}\Lambda^{-2},
+\]
+where $\Lambda=\diag(\lambda_1,\dots,\lambda_p)$ and $m=Q^{-1}\sigma^{-2}X^\top y$.
+
+Under the Nishimura--Suchard augmentation,
+\begin{equation}
+\beta \mid y,z=0,\sigma^2,\tau,\lambda,\zeta
+\sim
+\Normal(m_\zeta,Q_\zeta^{-1}),
+\qquad
+Q_\zeta
+=
+\sigma^{-2}X^\top X + \tau^{-2}\Lambda^{-2} + \zeta^{-2}I_p,
+\label{eq:gaussian-beta-update}
+\end{equation}
+with $m_\zeta = Q_\zeta^{-1}\sigma^{-2}X^\top y$.
+
+Likewise, in sparse logistic regression with P\'olya--Gamma augmentation,
+\begin{equation}
+Q_\zeta = X^\top \Omega X + \tau^{-2}\Lambda^{-2} + \zeta^{-2}I_p,
+\label{eq:logistic-beta-update}
+\end{equation}
+which is exactly the update stated by Nishimura and Suchard.
+
+\paragraph{Conclusion.}
+The later Gibbs-oriented paper recovers the non-regularized horseshoe Gibbs updates \emph{only for the global--local shrinkage block}. The coefficient update is \emph{not} the same, because regularization must enter somewhere, and in their construction it enters precisely through the extra Gaussian precision term.
+
+\subsection{Fixed versus random $\zeta$}
+
+The Nishimura--Suchard paper often reads as if $\zeta$ were meant to be fixed. This is not the right interpretation.
+
+There are three separate issues:
+\begin{enumerate}
+\item \textbf{Statistical modeling:} it is perfectly legitimate to put a prior on $\zeta$.
+\item \textbf{Gibbs structure:} the preservation of the $(\tau,\lambda)$ block does \emph{not} require fixing $\zeta$.
+\item \textbf{Ergodicity theory:} for their convergence proofs the paper assumes either fixed $\zeta$ or an upper-bounded support, because this keeps the drift/minorization arguments manageable.
+\end{enumerate}
+
+This distinction is crucial. The preservation of the ordinary horseshoe Gibbs block comes from conditional independence under the augmented model, not from treating $\zeta$ as fixed.
+
+\subsection{If one puts a prior on $\zeta^2$, what happens?}
+
+Suppose we adopt
+\begin{equation}
+\zeta^2 \sim \IG(a_\zeta,b_\zeta)
+\label{eq:zeta-ig-prior}
+\end{equation}
+under the fictitious-data construction \eqref{eq:fictitious-data}. Since
+\[
+p(z=0 \mid \beta,\zeta^2)
+\propto
+(\zeta^2)^{-p/2}
+\exp\!\left(-\frac{1}{2\zeta^2}\sum_{j=1}^p \beta_j^2\right),
+\]
+the full conditional is conjugate:
+\begin{equation}
+\zeta^2 \mid \beta,z=0
+\sim
+\IG\!\left(a_\zeta+\frac{p}{2},\,
+b_\zeta+\frac{1}{2}\sum_{j=1}^p \beta_j^2\right).
+\label{eq:zeta-full-conditional}
+\end{equation}
+Thus, from a purely computational standpoint, there is no obstacle to a full Bayesian treatment of the slab scale in the Gibbs-friendly augmentation.
+
+The only caveat is theoretical: the specific geometric-ergodicity statements proved by Nishimura and Suchard are formulated under fixed $\zeta$ or under an upper-bounded support condition. If one adopts an inverse-gamma prior with unbounded support as in \eqref{eq:zeta-ig-prior}, the exact same theorem does not follow automatically; one would need either an extension of their proof or a separate argument. But the \emph{sampler} itself remains valid and the key $(\tau,\lambda)$ block remains unchanged.
+
+\subsection{How the Nishimura--Suchard prior differs from Piironen--Vehtari}
+
+It is now possible to state the relationship precisely.
+
+\begin{enumerate}
+\item Both papers yield the same conditional regularized Gaussian law for
+\[
+\beta_j \mid \tau,\lambda_j,\zeta.
+\]
+\item Piironen--Vehtari leave the local-scale prior unchanged, which causes the extra factor $\bigl(1+\tau^2\lambda_j^2/\zeta^2\bigr)^{1/2}$ to appear in the $(\tau,\lambda)$ block.
+\item Nishimura--Suchard alter the prior on $\lambda_j$ by the compensating factor $\bigl(1+\tau^2\lambda_j^2/\zeta^2\bigr)^{-1/2}$, so that the ordinary global--local block is restored.
+\item Consequently, the Nishimura--Suchard prior has slightly lighter tails than the direct Piironen--Vehtari regularized horseshoe.
+\end{enumerate}
+
+So the later paper is not merely a trick for sampling the original prior. It is a closely related, but genuinely different, regularized global--local prior engineered to preserve Gibbs structure.
+
+\section{An auxiliary Gibbs perspective: Bhattacharya--Khare--Pal}
+
+Although not one of the three papers at the center of your question, the paper by Bhattacharya, Khare, and Pal is extremely useful for understanding the Gibbs landscape, because it studies geometric ergodicity for Gibbs samplers under the ordinary horseshoe and two regularized variants in linear regression.
+
+\subsection{Why this auxiliary paper matters here}
+
+The paper makes two points especially relevant to your question.
+
+\paragraph{First.}
+For the Piironen--Vehtari regularized horseshoe, exact Gibbs sampling is possible, but the local-scale update becomes nonstandard. This is exactly what one should expect from the factor \eqref{eq:pv-block}. In their notation the conditional density of $\lambda_j^2$ contains a nonstandard factor of the form
+\[
+\left(c^{-2} + (\tau^2\lambda_j^2)^{-1}\right)^{1/2}(\lambda_j^2)^{-3/2}\exp\!\left\{-\frac{1}{\lambda_j^2}\left(\frac{1}{\nu_j}+\frac{\beta_j^2}{2\sigma^2\tau^2}\right)\right\},
+\]
+so a special rejection or Metropolis step is needed. This is direct evidence that the original regularized horseshoe does not preserve the ordinary local-scale Gibbs updates.
+
+\paragraph{Second.}
+For the Nishimura--Suchard-style variant, the same paper shows that the algebraic modification indeed restores inverse-gamma local-scale updates in linear regression. In other words, once the compensating factor is moved from the conditional of $\beta_j$ into the prior on $\lambda_j$, the local-scale step becomes standard again.
+
+\subsection{Interpretation}
+
+This auxiliary result strongly reinforces the conceptual picture developed above:
+
+\begin{quote}
+The direct Piironen--Vehtari regularized horseshoe is a clean prior construction, but not a Gibbs-preserving one. The Nishimura--Suchard reformulation is Gibbs-preserving precisely because it is a different joint prior.
+\end{quote}
+
+So if your goal is \emph{Gibbs implementation}, the 2021 paper provides an intermediate bridge: it shows how both styles can be sampled in principle, and why the Nishimura--Suchard variant is algebraically simpler for block Gibbs updates.
+
+\section{Fan et al.\ (2025): robust Gibbs implementation in a specific model class}
+
+\subsection{What this paper is, and what it is not}
+
+Fan et al.\ do not propose a general Gibbs-preserving reformulation of the regularized horseshoe analogous to Nishimura and Suchard. Their contribution is different:
+\begin{enumerate}
+\item they work in a robust sparse linear regression model with a Laplace likelihood,
+\item they exploit a normal--exponential mixture representation of the Laplace likelihood,
+\item they combine this with the standard inverse-gamma mixture representation of half-Cauchy priors,
+\item and thereby obtain full or near-full Gibbs updates for horseshoe, horseshoe+, and regularized horseshoe priors in that specific model family.
+\end{enumerate}
+
+Thus Fan et al.\ are best read as a \emph{model-specific Gibbs implementation paper} with an empirical focus on robust variable selection and interval estimation.
+
+\subsection{Robust Gaussian mixture representation}
+
+They begin from a median regression / Laplace working likelihood and write
+\[
+y_i = \beta_0 + x_i^\top\beta + \tau^{-1/2}\xi \sqrt{\tilde v_i}\, z_i,
+\qquad
+\tilde v_i \mid \tau \sim \mathrm{Exp}(\tau^{-1}),
+\qquad
+z_i \sim \Normal(0,1),
+\]
+so that conditional on the latent variables $\tilde v_i$, the likelihood is Gaussian.
+
+This is what makes Gibbs sampling feasible: once the likelihood is conditionally Gaussian, the sparse priors may be combined with familiar Gaussian updates for $\beta$.
+
+\subsection{Fan et al.'s regularized horseshoe}
+
+Their regularized horseshoe is written as
+\begin{equation}
+\beta_j \mid s_j,\lambda,\zeta \sim \Normal(0,\lambda^2 \tilde s_j^2),
+\qquad
+\tilde s_j^2 = \frac{\zeta^2 s_j^2}{\zeta^2 + \lambda^2 s_j^2},
+\label{eq:fan-rhs}
+\end{equation}
+where I have replaced their symbol $b$ by the unified $\zeta$.
+
+Using the same algebra as before,
+\begin{equation}
+\lambda^2 \tilde s_j^2
+=
+\left(\zeta^{-2} + (\lambda^2 s_j^2)^{-1}\right)^{-1},
+\label{eq:fan-regvar}
+\end{equation}
+so this is exactly the same regularized variance formula as in \eqref{eq:regvar}, with $u_j=\lambda s_j$.
+
+They also explicitly observe the factorization
+\begin{equation}
+p(\beta_j \mid s_j,\lambda,\zeta)
+\propto
+\Normal(\beta_j \mid 0,\lambda^2 s_j^2)\,
+\Normal(\beta_j \mid 0,\zeta^2),
+\label{eq:fan-product}
+\end{equation}
+and interpret this as an analogue of Bayesian elastic net, in the sense that the ordinary horseshoe component plays the role of sparse shrinkage while the Gaussian slab contributes ridge-like regularization.
+
+\subsection{The coefficient update}
+
+Because the likelihood is conditionally Gaussian, the $\beta$-update is multivariate Gaussian. Let
+\[
+W := \diag\!\left(\frac{\tau}{\xi^2 \tilde v_1},\dots,\frac{\tau}{\xi^2 \tilde v_n}\right),
+\qquad
+D^{-1}:=\diag\!\left(\frac{1}{\lambda^2 s_1^2}+\frac{1}{\zeta^2},\dots,\frac{1}{\lambda^2 s_p^2}+\frac{1}{\zeta^2}\right).
+\]
+Then, conditional on the latent variables and all shrinkage scales,
+\begin{equation}
+\beta \mid \text{rest}
+\sim
+\Normal\!\left(Q^{-1}X^\top W(y-\beta_0\mathbf{1}),\,Q^{-1}\right),
+\qquad
+Q = X^\top W X + D^{-1}.
+\label{eq:fan-beta-update}
+\end{equation}
+This is the robust analogue of the Nishimura--Suchard update: regularization appears as an additive $\zeta^{-2}$ contribution to the prior precision of each coefficient.
+
+\subsection{What happens if $\zeta^2$ is random?}
+
+This is one of the places where Fan et al.\ are especially helpful for your question. They explicitly recommend putting a prior on $\zeta^2$ when the scale of large coefficients is uncertain, and use an inverse-gamma prior
+\begin{equation}
+\zeta^2 \sim \IG(a_\zeta,b_\zeta).
+\label{eq:fan-b-prior}
+\end{equation}
+Under the product representation \eqref{eq:fan-product}, the full conditional is conjugate:
+\begin{equation}
+\zeta^2 \mid \beta
+\sim
+\IG\!\left(a_\zeta+\frac{p}{2},\, b_\zeta+\frac{1}{2}\sum_{j=1}^p \beta_j^2\right).
+\label{eq:fan-b-update}
+\end{equation}
+This mirrors \eqref{eq:zeta-full-conditional}. Therefore Fan et al.\ provide concrete model-specific evidence for the claim that a random slab scale is entirely compatible with Gibbs sampling.
+
+\subsection{What this implies relative to the earlier papers}
+
+Fan et al.\ show the following.
+
+\begin{enumerate}
+\item A prior on the slab scale is not merely philosophically admissible; it can be practically implemented in a Gibbs sampler.
+\item The extra regularization again enters the coefficient block through an additive precision term.
+\item The difference between fixed and random $\zeta$ is mostly computational overhead and posterior uncertainty quantification for the slab scale itself; it is not a contradiction in Bayesian modeling.
+\end{enumerate}
+
+So, if your concern is ``weren't we supposed to put a prior on $\zeta$?'', Fan et al.\ provide a clear answer: \emph{yes, that is a perfectly coherent choice, and in some model classes it leads to a clean Gibbs update.}
+
+\subsection{A cautionary note on one sentence in Fan et al.}
+
+There is one sentence in Fan et al.\ that should be read with care. They say that when $b\to 0$ (that is, $\zeta\to 0$ in the unified notation), the coefficient is ``not penalized.'' This is inconsistent with their own shrinkage-factor definitions. From
+\[
+v_j(\zeta)=\left(\zeta^{-2}+u_j^{-2}\right)^{-1},
+\]
+it is immediate that $\zeta \to 0$ implies $v_j(\zeta)\to 0$, hence \emph{maximal} regularization rather than none. The formulas in the paper support the latter interpretation, so the quoted sentence should be treated as a verbal slip rather than as a substantive modeling difference.
+
+\section{Side-by-side mathematical comparison}
+
+\subsection{A compact comparison table}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.19\textwidth} >{\raggedright\arraybackslash}p{0.24\textwidth} >{\raggedright\arraybackslash}p{0.24\textwidth} >{\raggedright\arraybackslash}p{0.24\textwidth}}
+\toprule
+Feature & Piironen--Vehtari & Nishimura--Suchard & Fan et al. \\
+\midrule
+Primary aim & Prior design, sparsity calibration, finite-slab regularization & Gibbs-friendly reformulation with convergence theory & Robust model-specific Gibbs implementation and empirical comparison \\
+\addlinespace
+Regularized conditional variance &
+$\left(\zeta^{-2}+(\tau^2\lambda_j^2)^{-1}\right)^{-1}$ &
+Same &
+$\left(\zeta^{-2}+(\lambda^2 s_j^2)^{-1}\right)^{-1}$ \\
+\addlinespace
+Does $\beta \mid \text{scales},\zeta$ match across papers? &
+Yes &
+Yes &
+Yes, after notation mapping \\
+\addlinespace
+Local-scale prior changed? &
+No &
+Yes, by factor $(1+\tau^2\lambda_j^2/\zeta^2)^{-1/2}$ &
+No generic reformulation; handled inside a specific hierarchical model \\
+\addlinespace
+Ordinary $(\tau,\lambda)$ Gibbs block preserved? &
+No &
+Yes &
+Model-specific analogue only; not a generic claim \\
+\addlinespace
+Coefficient update changed? &
+Yes &
+Yes, via $+\zeta^{-2}I$ in the precision &
+Yes, via $+\zeta^{-2}$ in each prior precision entry \\
+\addlinespace
+Prior on $\zeta$ encouraged? &
+Yes, when scale knowledge is weak &
+Compatible, but fixed or bounded for the main theory &
+Yes, explicitly implemented with inverse-gamma prior \\
+\addlinespace
+Main computational tool &
+NUTS / Stan &
+Block Gibbs with augmentation & Robust Gibbs using conditionally Gaussian likelihood \\
+\addlinespace
+Main theoretical message &
+Finite slab improves robustness and links to spike-and-slab &
+Regularization can preserve Gibbs structure and improve ergodicity &
+In a robust model, horseshoe-family priors can be sampled efficiently and can yield useful interval estimates \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{The central mathematical distinction in one display}
+
+The three papers are best compared through the joint factor involving a single coefficient and its local scale.
+
+\paragraph{Ordinary global--local prior:}
+\begin{equation}
+p_{\HS}(\beta_j,\lambda_j \mid \tau)
+\propto
+\frac{1}{\tau\lambda_j}
+\exp\!\left(-\frac{\beta_j^2}{2\tau^2\lambda_j^2}\right)\Loc(\lambda_j).
+\label{eq:compare-hs}
+\end{equation}
+
+\paragraph{Piironen--Vehtari:}
+\begin{equation}
+p_{\PV}(\beta_j,\lambda_j \mid \tau,\zeta)
+\propto
+\frac{1}{\tau\lambda_j}
+\Bigl(1+\tau^2\lambda_j^2/\zeta^2\Bigr)^{1/2}
+\exp\!\left(-\frac{\beta_j^2}{2\tau^2\lambda_j^2}\right)
+\exp\!\left(-\frac{\beta_j^2}{2\zeta^2}\right)
+\Loc(\lambda_j).
+\label{eq:compare-pv}
+\end{equation}
+
+\paragraph{Nishimura--Suchard:}
+\begin{equation}
+p_{\NS}(\beta_j,\lambda_j \mid \tau,\zeta)
+\propto
+\frac{1}{\tau\lambda_j}
+\exp\!\left(-\frac{\beta_j^2}{2\tau^2\lambda_j^2}\right)
+\exp\!\left(-\frac{\beta_j^2}{2\zeta^2}\right)
+\Loc(\lambda_j).
+\label{eq:compare-ns}
+\end{equation}
+
+This one-display comparison makes the whole story transparent:
+\begin{itemize}
+\item \eqref{eq:compare-pv} keeps the Piironen--Vehtari conditional prior for $\beta_j$ but modifies the $(\tau,\lambda)$ block through the positive square-root factor.
+\item \eqref{eq:compare-ns} removes that factor at the joint level, so $(\tau,\lambda)$ behave as in the ordinary horseshoe.
+\item Fan et al.\ work with the same regularized Gaussian kernel for $\beta_j$, but in a different likelihood and hierarchy, so the relevant comparison is at the level of the resulting Gaussian precision update rather than a generic prior identity.
+\end{itemize}
+
+\section{Explicit Gibbs or block-update algorithms}
+
+\subsection{Algorithm A: direct regularized horseshoe in the style of Piironen--Vehtari}
+
+For a generic likelihood $L(y\mid \beta)$ and slab scale $\zeta$, the direct regularized horseshoe proceeds conceptually as follows.
+
+\begin{enumerate}
+\item Update $\beta$ from
+\[
+p_{\PV}(\beta \mid y,\tau,\lambda,\zeta)
+\propto
+L(y\mid \beta)\prod_{j=1}^p \Normal(\beta_j \mid 0, v_j(\zeta)).
+\]
+\item Update $(\tau,\lambda)$ from
+\[
+p_{\PV}(\tau,\lambda \mid \beta,\zeta,y)
+\propto
+p(\tau)\prod_{j=1}^p
+\frac{1}{\tau\lambda_j}
+\Bigl(1+\tau^2\lambda_j^2/\zeta^2\Bigr)^{1/2}
+\exp\!\left(-\frac{\beta_j^2}{2\tau^2\lambda_j^2}\right)\Loc(\lambda_j).
+\]
+\item Update $\zeta$ from its nonconjugate conditional if a prior is assigned.
+\end{enumerate}
+
+This is \emph{not} an exact-gibbs-preserving modification of the ordinary horseshoe sampler, because the second block changes structurally.
+
+\subsection{Algorithm B: Gibbs-friendly regularization in the style of Nishimura--Suchard}
+
+Introduce pseudo-data $z_j=0$ with $z_j \mid \beta_j,\zeta \sim \Normal(\beta_j,\zeta^2)$.
+
+\begin{enumerate}
+\item Update $\beta$ from
+\[
+p(\beta \mid y,z=0,\tau,\lambda,\zeta)
+\propto
+L(y\mid \beta)\,
+\exp\!\left(-\frac{1}{2\zeta^2}\sum_{j=1}^p \beta_j^2\right)\,
+\prod_{j=1}^p \Normal(\beta_j \mid 0,\tau^2\lambda_j^2).
+\]
+In conditionally Gaussian models this is a multivariate Gaussian update with added precision term $\zeta^{-2}I$.
+\item Update $(\tau,\lambda)$ from the \emph{ordinary} horseshoe/global--local block
+\[
+p(\tau,\lambda \mid \beta,y,z=0,\zeta) = p(\tau,\lambda \mid \beta).
+\]
+\item If $\zeta$ is random, update $\zeta^2$ from \eqref{eq:zeta-full-conditional} when an inverse-gamma prior is used.
+\item Update any additional likelihood-augmentation variables, such as P\'olya--Gamma variables in logistic regression.
+\end{enumerate}
+
+This is the precise block-Gibbs sense in which the later paper ``recovers the non-regularized horseshoe updates.''
+
+\subsection{Algorithm C: robust Gibbs in the style of Fan et al.}
+
+\begin{enumerate}
+\item Update the latent mixture variables in the Laplace likelihood.
+\item Update $\beta$ from the Gaussian conditional \eqref{eq:fan-beta-update}.
+\item Update the local and global half-Cauchy scales through inverse-gamma auxiliary-mixture steps.
+\item If $\zeta^2$ is random, update it from \eqref{eq:fan-b-update}.
+\end{enumerate}
+
+This is an exact or nearly exact Gibbs construction within a \emph{specific} robust regression hierarchy rather than a generic prior-level equivalence result.
+
+\section{Direct answers to the main conceptual questions}
+
+\subsection{Does the later Gibbs paper really recover the non-regularized horseshoe Gibbs updates?}
+
+Yes, but only in a specific and qualified sense.
+
+\begin{enumerate}
+\item It recovers the non-regularized horseshoe updates for the global--local shrinkage block $(\tau,\lambda)$.
+\item It does \emph{not} recover the non-regularized update for $\beta$.
+\item This recovery does \emph{not} happen because $\zeta$ is fixed.
+\item It happens because the regularization is introduced through a different joint prior / pseudo-data construction that leaves $p(\tau,\lambda \mid \beta)$ unchanged.
+\end{enumerate}
+
+So the correct statement is:
+\[
+\text{same } (\tau,\lambda)\text{-block, different }\beta\text{-block.}
+\]
+
+\subsection{Are we supposed to put a prior on $\zeta$?}
+
+From a Bayesian modeling perspective, yes, whenever the scale of large coefficients is not known with confidence. Piironen--Vehtari explicitly recommend this. Fan et al.\ also recommend it and implement it. Nishimura--Suchard do not reject this idea; they simplify the main theory by fixing $\zeta$ or assuming a bounded support condition.
+
+Thus the difference across papers is not philosophical. It is computational and theoretical:
+\begin{itemize}
+\item \textbf{Modeling:} random $\zeta$ is fully legitimate.
+\item \textbf{Sampling:} random $\zeta$ may or may not be conjugate depending on the formulation.
+\item \textbf{Theory:} fixed or bounded $\zeta$ is easier for drift/minorization arguments.
+\end{itemize}
+
+\subsection{Why do the papers differ on this point?}
+
+Because they are solving different problems.
+
+\paragraph{Piironen--Vehtari.}
+Their goal is to build a statistically sensible prior that separates sparsity from large-signal regularization.
+
+\paragraph{Nishimura--Suchard.}
+Their goal is to preserve Gibbs tractability and prove convergence properties of the resulting samplers.
+
+\paragraph{Fan et al.}
+Their goal is to build a practically efficient Gibbs implementation in a robust regression model and examine variable selection and interval performance empirically.
+
+These are different objectives, so it is unsurprising that the role of $\zeta$ is handled differently.
+
+\subsection{What is gained and lost in each formulation?}
+
+\paragraph{Piironen--Vehtari.}
+The gain is conceptual clarity. One sees exactly what regularization means, how it relates to spike-and-slab, and how global sparsity and slab width should be calibrated. The loss is that direct Gibbs updates for the ordinary horseshoe shrinkage block are no longer preserved.
+
+\paragraph{Nishimura--Suchard.}
+The gain is computational: the ordinary horseshoe/global--local block survives intact. The loss is that the resulting prior is not exactly the same joint prior as Piironen--Vehtari's; it is a nearby but distinct regularized prior.
+
+\paragraph{Fan et al.}
+The gain is practical: in a robust model one can actually run an efficient Gibbs sampler with a random slab scale and assess empirical uncertainty. The loss is generality: the construction is tied to the Laplace-mixture regression framework and does not by itself give a generic prior-level equivalence theorem.
+
+\section{A final synthesis}
+
+The three main papers should be read as successive layers of the same story.
+
+The first layer is \emph{prior design}. Piironen and Vehtari explain why the ordinary horseshoe can be too permissive for large coefficients and introduce the finite-slab regularized horseshoe to repair that weakness. They also explain how to calibrate the global scale using a prior guess for the effective number of relevant variables.
+
+The second layer is \emph{Gibbs structure}. Nishimura and Suchard observe that the direct regularized horseshoe is statistically appealing but computationally awkward for block Gibbs samplers. Their key idea is to move from the original regularized conditional law to a different but closely related joint prior, equivalently a fictitious-data construction, so that the global--local shrinkage block remains exactly the same as in the non-regularized model. The preservation of this block is due to conditional independence, not to fixing the slab scale.
+
+The third layer is \emph{model-specific implementation}. Fan et al.\ show that in a robust Laplace-mixture regression one can combine the horseshoe family with Gibbs sampling, including the regularized horseshoe with a random slab scale, and obtain competitive interval estimation and variable selection in the presence of heavy-tailed errors. This does not replace the Nishimura--Suchard theory, but it confirms in practice that a fully Bayesian treatment of the slab scale is both natural and implementable.
+
+From the perspective of your original question, the most precise answer is therefore the following.
+
+\begin{quote}
+The later Gibbs-oriented paper does recover the non-regularized horseshoe Gibbs updates for the \emph{global--local shrinkage block}, but not for the coefficient block, and not because the slab scale is fixed. The recovery is achieved by changing the \emph{joint prior structure} via a fictitious-data augmentation. A prior on the regularization parameter $\zeta$ is still a perfectly sensible Bayesian choice; the reasons some papers fix it are mainly expository, computational, or driven by the needs of ergodicity theory.
+\end{quote}
+
+\section*{References}
+
+\begin{thebibliography}{99}
+
+\bibitem{Bhadra2017}
+Bhadra, A., Datta, J., Polson, N. G., and Willard, B. (2017).
+\newblock The horseshoe+ estimator of ultra-sparse signals.
+\newblock \emph{Bayesian Analysis}, 12(4), 1105--1131.
+
+\bibitem{BKP2021}
+Bhattacharya, S. K., Khare, K., and Pal, S. (2021).
+\newblock Geometric ergodicity of Gibbs samplers for the horseshoe and its regularized variants.
+\newblock arXiv:2101.00366.
+
+\bibitem{Carvalho2010}
+Carvalho, C. M., Polson, N. G., and Scott, J. G. (2010).
+\newblock The horseshoe estimator for sparse signals.
+\newblock \emph{Biometrika}, 97(2), 465--480.
+
+\bibitem{Fan2025}
+Fan, K., Subedi, S., Dissanayake Pathiranage, V. R., and Wu, C. (2025).
+\newblock Robust Bayesian high-dimensional variable selection and inference with the horseshoe family of priors.
+\newblock arXiv:2507.10975.
+
+\bibitem{MakalicSchmidt2016}
+Makalic, E. and Schmidt, D. F. (2016).
+\newblock A simple sampler for the horseshoe estimator.
+\newblock \emph{IEEE Signal Processing Letters}, 23(1), 179--182.
+
+\bibitem{NishimuraSuchard2023}
+Nishimura, A. and Suchard, M. A. (2023).
+\newblock Shrinkage with shrunken shoulders: Gibbs sampling shrinkage model posteriors with guaranteed convergence rates.
+\newblock \emph{Bayesian Analysis}, 18(2), 367--390.
+
+\bibitem{PiironenVehtari2017}
+Piironen, J. and Vehtari, A. (2017).
+\newblock Sparsity information and regularization in the horseshoe and other shrinkage priors.
+\newblock \emph{Electronic Journal of Statistics}, 11(2), 5018--5051.
+
+\bibitem{PolsonScott2010}
+Polson, N. G. and Scott, J. G. (2010).
+\newblock Shrink globally, act locally: Sparse Bayesian regularization and prediction.
+\newblock In \emph{Bayesian Statistics 9}, 501--538.
+
+\bibitem{PolsonScottWindle2013}
+Polson, N. G., Scott, J. G., and Windle, J. (2013).
+\newblock Bayesian inference for logistic models using P\'olya--Gamma latent variables.
+\newblock \emph{Journal of the American Statistical Association}, 108(504), 1339--1349.
+
+\bibitem{PolsonScottWindle2014}
+Polson, N. G., Scott, J. G., and Windle, J. (2014).
+\newblock The Bayesian bridge.
+\newblock \emph{Journal of the Royal Statistical Society: Series B}, 76(4), 713--733.
+
+\bibitem{vanderPas2017}
+van der Pas, S., Szab\'o, B., and van der Vaart, A. (2017).
+\newblock Uncertainty quantification for the horseshoe.
+\newblock \emph{Bayesian Analysis}, 12(4), 1221--1274.
+
+\end{thebibliography}
 
 \end{document}
