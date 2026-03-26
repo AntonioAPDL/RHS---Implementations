@@ -57,7 +57,7 @@ This note has four goals.
 \item To place the robust Gibbs implementation of Fan et al.\ in the correct position relative to the earlier literature.
 \end{enumerate}
 
-The central conclusion is the following. The later Gibbs-oriented paper \emph{does} recover the non-regularized horseshoe Gibbs updates for the global--local shrinkage block, but this is \emph{not} because the slab scale is fixed. Rather, it is because the paper changes the \emph{joint} prior structure by introducing an equivalent fictitious-data representation. This preserves the conditional law of $(\tau,\lambda)$ given $\beta$, while still producing the same regularized conditional distribution for $\beta \mid \tau,\lambda,\zeta$ as in the original regularized horseshoe. A prior on the slab scale remains perfectly reasonable from a Bayesian standpoint; what differs across the papers is primarily computational strategy and theoretical focus.
+The central conclusion is the following. The later Gibbs-oriented paper \emph{does} recover the non-regularized horseshoe Gibbs updates for the global--local shrinkage block, but this is \emph{not} because the slab scale is fixed. Rather, it is because the paper adopts a modified joint construction, equivalently represented through fictitious data. This preserves the full-conditional law of $(\tau,\lambda)$ given $\beta$ (and other non-$\tau,\lambda$ states), while still producing the same regularized conditional distribution for $\beta \mid \tau,\lambda,\zeta$ as in the original regularized horseshoe. A prior on the slab scale remains perfectly reasonable from a Bayesian standpoint; what differs across the papers is primarily computational strategy and theoretical focus.
 
 \section{Unified notation}
 
@@ -105,6 +105,23 @@ Mathematically these play the same role: they are positive scale parameters that
 \qquad
 \zeta \equiv b \quad \text{(Fan et al.)}.
 \]
+
+\subsection{Crosswalk of core symbols}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.25\textwidth} >{\raggedright\arraybackslash}p{0.19\textwidth} >{\raggedright\arraybackslash}p{0.19\textwidth} >{\raggedright\arraybackslash}p{0.19\textwidth}}
+\toprule
+Quantity & Piironen--Vehtari & Nishimura--Suchard & Fan et al. \\
+\midrule
+Regression coefficient & $\beta_j$ & $\beta_j$ & $\beta_j$ \\
+Global shrinkage scale & $\tau$ & $\tau$ & $\lambda$ \\
+Local shrinkage scale & $\lambda_j$ & $\lambda_j$ & $s_j$ \\
+Slab/regularization scale & $c$ & $\zeta$ & $b$ \\
+Likelihood-scale symbol & $\sigma$ (Gaussian examples) & model dependent & $\tau$ (Laplace likelihood) \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \subsection{Regularized variance as a common object}
 
@@ -344,7 +361,7 @@ p(\tau)\,
 \right].
 \label{eq:ns-block}
 \end{equation}
-This is exactly the ordinary global--local shrinkage block.
+This is exactly the ordinary global--local shrinkage block at the level of full conditionals given $\beta$ (and any likelihood-augmentation states).
 
 So the statement
 \[
@@ -352,7 +369,7 @@ p_{\NS}(\tau,\lambda \mid \beta,\zeta,\text{rest})
 =
 p_{\HS}(\tau,\lambda \mid \beta,\text{rest})
 \]
-is true, but it is true only because the \emph{joint prior} has been modified to make it true.
+is true, but it is true only because the \emph{joint prior} has been modified to make it true. If one instead works with partially collapsed updates that integrate out $\beta$, additional normalization terms can appear in the $\tau$-update; this does not contradict the full-conditional identity above.
 
 \subsection{The fictitious-data augmentation}
 
@@ -422,13 +439,13 @@ The later Gibbs-oriented paper recovers the non-regularized horseshoe Gibbs upda
 
 \subsection{Fixed versus random $\zeta$}
 
-The Nishimura--Suchard paper often reads as if $\zeta$ were meant to be fixed. This is not the right interpretation.
+In Nishimura--Suchard, most ergodicity proofs are presented for fixed $\zeta$ for technical convenience, but the modeling discussion allows either fixed or random slab width.
 
 There are three separate issues:
 \begin{enumerate}
 \item \textbf{Statistical modeling:} it is perfectly legitimate to put a prior on $\zeta$.
 \item \textbf{Gibbs structure:} the preservation of the $(\tau,\lambda)$ block does \emph{not} require fixing $\zeta$.
-\item \textbf{Ergodicity theory:} for their convergence proofs the paper assumes either fixed $\zeta$ or an upper-bounded support, because this keeps the drift/minorization arguments manageable.
+\item \textbf{Ergodicity theory:} the main theorems are written for fixed $\zeta$, and Remark~3.9 extends the argument to random $\zeta$ under bounded support, which keeps the drift/minorization bounds uniform.
 \end{enumerate}
 
 This distinction is crucial. The preservation of the ordinary horseshoe Gibbs block comes from conditional independence under the augmented model, not from treating $\zeta$ as fixed.
@@ -492,6 +509,8 @@ so a special rejection or Metropolis step is needed. This is direct evidence tha
 
 \paragraph{Second.}
 For the Nishimura--Suchard-style variant, the same paper shows that the algebraic modification indeed restores inverse-gamma local-scale updates in linear regression. In other words, once the compensating factor is moved from the conditional of $\beta_j$ into the prior on $\lambda_j$, the local-scale step becomes standard again.
+
+At the same time, Bhattacharya--Khare--Pal also show that in their partially collapsed linear-regression implementation, the $\tau$-update can carry an extra normalizing factor (their $c(\tau^2)^p$ term). This is consistent with \eqref{eq:ns-block}: \eqref{eq:ns-block} is a statement about the full conditional given $\beta$ under the augmented construction, whereas collapsed updates can have different algebraic forms.
 
 \subsection{Interpretation}
 
@@ -610,11 +629,11 @@ So, if your concern is ``weren't we supposed to put a prior on $\zeta$?'', Fan e
 
 \subsection{A cautionary note on one sentence in Fan et al.}
 
-There is one sentence in Fan et al.\ that should be read with care. They say that when $b\to 0$ (that is, $\zeta\to 0$ in the unified notation), the coefficient is ``not penalized.'' This is inconsistent with their own shrinkage-factor definitions. From
+There is one sentence in Fan et al.\ that should be read with care. They say that when $b\to 0$ (that is, $\zeta\to 0$ in the unified notation), the coefficient is ``not penalized.'' Taken literally, this appears to reverse their own shrinkage-factor definitions. From
 \[
 v_j(\zeta)=\left(\zeta^{-2}+u_j^{-2}\right)^{-1},
 \]
-it is immediate that $\zeta \to 0$ implies $v_j(\zeta)\to 0$, hence \emph{maximal} regularization rather than none. The formulas in the paper support the latter interpretation, so the quoted sentence should be treated as a verbal slip rather than as a substantive modeling difference.
+it is immediate that $\zeta \to 0$ implies $v_j(\zeta)\to 0$, hence \emph{maximal} regularization rather than none. Their equations support this latter interpretation, so the quoted sentence is best treated as a wording slip rather than as a substantive modeling difference.
 
 \section{Side-by-side mathematical comparison}
 
@@ -645,7 +664,7 @@ No generic reformulation; handled inside a specific hierarchical model \\
 \addlinespace
 Ordinary $(\tau,\lambda)$ Gibbs block preserved? &
 No &
-Yes &
+Yes, for the full conditional $p(\tau,\lambda\mid\beta,\cdot)$ under augmentation &
 Model-specific analogue only; not a generic claim \\
 \addlinespace
 Coefficient update changed? &
@@ -754,7 +773,7 @@ L(y\mid \beta)\,
 \prod_{j=1}^p \Normal(\beta_j \mid 0,\tau^2\lambda_j^2).
 \]
 In conditionally Gaussian models this is a multivariate Gaussian update with added precision term $\zeta^{-2}I$.
-\item Update $(\tau,\lambda)$ from the \emph{ordinary} horseshoe/global--local block
+\item Update $(\tau,\lambda)$ from the \emph{ordinary} horseshoe/global--local block (for likelihoods that depend on parameters only through $\beta$)
 \[
 p(\tau,\lambda \mid \beta,y,z=0,\zeta) = p(\tau,\lambda \mid \beta).
 \]
@@ -782,7 +801,7 @@ This is an exact or nearly exact Gibbs construction within a \emph{specific} rob
 Yes, but only in a specific and qualified sense.
 
 \begin{enumerate}
-\item It recovers the non-regularized horseshoe updates for the global--local shrinkage block $(\tau,\lambda)$.
+\item It recovers the non-regularized horseshoe updates for the full-conditional global--local shrinkage block $(\tau,\lambda)\mid\beta,\cdot$.
 \item It does \emph{not} recover the non-regularized update for $\beta$.
 \item This recovery does \emph{not} happen because $\zeta$ is fixed.
 \item It happens because the regularization is introduced through a different joint prior / pseudo-data construction that leaves $p(\tau,\lambda \mid \beta)$ unchanged.
@@ -836,14 +855,14 @@ The three main papers should be read as successive layers of the same story.
 
 The first layer is \emph{prior design}. Piironen and Vehtari explain why the ordinary horseshoe can be too permissive for large coefficients and introduce the finite-slab regularized horseshoe to repair that weakness. They also explain how to calibrate the global scale using a prior guess for the effective number of relevant variables.
 
-The second layer is \emph{Gibbs structure}. Nishimura and Suchard observe that the direct regularized horseshoe is statistically appealing but computationally awkward for block Gibbs samplers. Their key idea is to move from the original regularized conditional law to a different but closely related joint prior, equivalently a fictitious-data construction, so that the global--local shrinkage block remains exactly the same as in the non-regularized model. The preservation of this block is due to conditional independence, not to fixing the slab scale.
+The second layer is \emph{Gibbs structure}. Nishimura and Suchard observe that the direct regularized horseshoe is statistically appealing but computationally awkward for block Gibbs samplers. Their key idea is to move from the original regularized conditional law to a different but closely related joint prior, equivalently a fictitious-data construction, so that the full-conditional global--local shrinkage block remains exactly the same as in the non-regularized model. The preservation of this block is due to conditional independence, not to fixing the slab scale.
 
 The third layer is \emph{model-specific implementation}. Fan et al.\ show that in a robust Laplace-mixture regression one can combine the horseshoe family with Gibbs sampling, including the regularized horseshoe with a random slab scale, and obtain competitive interval estimation and variable selection in the presence of heavy-tailed errors. This does not replace the Nishimura--Suchard theory, but it confirms in practice that a fully Bayesian treatment of the slab scale is both natural and implementable.
 
 From the perspective of your original question, the most precise answer is therefore the following.
 
 \begin{quote}
-The later Gibbs-oriented paper does recover the non-regularized horseshoe Gibbs updates for the \emph{global--local shrinkage block}, but not for the coefficient block, and not because the slab scale is fixed. The recovery is achieved by changing the \emph{joint prior structure} via a fictitious-data augmentation. A prior on the regularization parameter $\zeta$ is still a perfectly sensible Bayesian choice; the reasons some papers fix it are mainly expository, computational, or driven by the needs of ergodicity theory.
+The later Gibbs-oriented paper does recover the non-regularized horseshoe Gibbs updates for the \emph{full-conditional global--local shrinkage block}, but not for the coefficient block, and not because the slab scale is fixed. The recovery is achieved by changing the \emph{joint prior structure} via a fictitious-data augmentation. A prior on the regularization parameter $\zeta$ is still a perfectly sensible Bayesian choice; the reasons some papers fix it are mainly expository, computational, or driven by the needs of ergodicity theory.
 \end{quote}
 
 \section*{References}
